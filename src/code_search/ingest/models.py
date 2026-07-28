@@ -23,3 +23,4 @@ class Chunk:
     start_line: int
     end_line: int
     parent_id: str | None
+    has_error: bool = False

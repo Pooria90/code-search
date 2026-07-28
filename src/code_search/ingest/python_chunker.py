@@ -34,7 +34,7 @@ def _content_for(node: Node, class_header: str | None) -> str:
     return f"{class_header}\n    ...\n{text}"
 
 
-def _chunk_for_definition(node: Node, source: bytes, repo: str, path: str) -> Chunk:
+def _chunk_for_definition(node: Node, source: bytes, repo: str, path: str, has_error: bool) -> Chunk:
     definition = unwrap(node)
     parent_class = enclosing_class(node)
 
@@ -62,10 +62,11 @@ def _chunk_for_definition(node: Node, source: bytes, repo: str, path: str) -> Ch
         start_line=node.start_point[0] + 1,
         end_line=node.end_point[0] + 1,
         parent_id=parent_id,
+        has_error=has_error,
     )
 
 
-def _module_chunk(root: Node, source: bytes, repo: str, path: str) -> Chunk | None:
+def _module_chunk(root: Node, source: bytes, repo: str, path: str, has_error: bool) -> Chunk | None:
     header_children = [
         child for child in root.children if child.type not in _DEF_TYPES and child.type != "decorated_definition"
     ]
@@ -87,6 +88,7 @@ def _module_chunk(root: Node, source: bytes, repo: str, path: str) -> Chunk | No
         start_line=header_children[0].start_point[0] + 1,
         end_line=header_children[-1].end_point[0] + 1,
         parent_id=None,
+        has_error=has_error,
     )
 
 
@@ -94,18 +96,19 @@ def parse_source(source: bytes, repo: str, path: str) -> list[Chunk]:
     parser = Parser(_LANGUAGE)
     tree = parser.parse(source)
     root = tree.root_node
-    if root.has_error:
+    has_error = root.has_error
+    if has_error:
         logger.warning(f"{path}: parsed with syntax errors, chunks may be incomplete")
 
     chunks: list[Chunk] = []
 
-    module_chunk = _module_chunk(root, source, repo, path)
+    module_chunk = _module_chunk(root, source, repo, path, has_error)
     if module_chunk is not None:
         chunks.append(module_chunk)
 
     for node in collect_definitions(root):
         for piece in split_if_needed(node):
-            chunks.append(_chunk_for_definition(piece, source, repo, path))
+            chunks.append(_chunk_for_definition(piece, source, repo, path, has_error))
 
     return chunks
 

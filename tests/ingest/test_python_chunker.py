@@ -103,10 +103,22 @@ def test_file_with_no_module_level_statements_has_no_module_chunk():
     assert not any(c.kind == ChunkKind.MODULE for c in chunks)
 
 
-def test_malformed_source_does_not_crash():
-    source = "def foo(:\n    pass\n"
+def test_malformed_source_does_not_crash_and_flags_chunks():
+    source = "import os\n\ndef foo(:\n    pass\n"
     chunks = _chunks(source)
     assert isinstance(chunks, list)
+    assert chunks and all(c.has_error for c in chunks)
+
+
+def test_clean_source_is_not_flagged():
+    source = """
+import os
+
+def foo():
+    return 1
+"""
+    chunks = _chunks(source)
+    assert chunks and not any(c.has_error for c in chunks)
 
 
 def test_signature_excludes_body():
