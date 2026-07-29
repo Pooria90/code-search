@@ -31,6 +31,16 @@ def _make_id(repo: str, path: str, content: str) -> str:
 
 _SOURCE_ROOT_NAMES = {"src", "lib"}
 _PROJECT_MARKERS = ("pyproject.toml", "setup.py", "setup.cfg")
+_REPO_MARKERS = (".git", *_PROJECT_MARKERS)
+
+
+def find_repo_root(path: str | Path) -> Path | None:
+    """Nearest ancestor holding a repo marker. Innermost wins, so a vendored
+    checkout resolves to its own root rather than the outer project's."""
+    for candidate in Path(path).resolve().parents:
+        if any((candidate / marker).exists() for marker in _REPO_MARKERS):
+            return candidate
+    return None
 
 
 def resolve_module_name(path: str | Path) -> str:
@@ -183,14 +193,30 @@ def parse_file(
     repo: str = "",
     max_tokens: int = MAX_TOKENS,
     count_tokens: Callable[[str], int] | None = None,
+    repo_root: str | Path | None = None,
 ) -> list[Chunk]:
+    """Chunk a file. `repo` and `path` are recorded relative to the repository so
+    chunk ids don't depend on where it sits on disk; pass `repo_root` to pin it,
+    otherwise the nearest repo marker above the file is used."""
     file_path = Path(path)
     source = file_path.read_bytes()
+
+    root = Path(repo_root).resolve() if repo_root is not None else find_repo_root(file_path)
+    relative_path = file_path
+    if root is not None:
+        try:
+            relative_path = file_path.resolve().relative_to(root)
+        except ValueError:
+            relative_path = file_path
+
     return parse_source(
         source,
-        repo=repo,
-        path=str(file_path),
+        repo=repo or (root.name if root is not None else ""),
+        # posix + repo-relative so the same file hashes identically across
+        # machines, checkout locations, and platforms
+        path=relative_path.as_posix(),
         max_tokens=max_tokens,
         count_tokens=count_tokens,
+        # resolved from the real location on disk, not the relative path
         module_name=resolve_module_name(file_path),
     )
