@@ -1,4 +1,5 @@
 import hashlib
+from collections.abc import Callable
 from pathlib import Path
 
 import tree_sitter_python as tspython
@@ -6,7 +7,7 @@ from loguru import logger
 from tree_sitter import Language, Node, Parser
 
 from code_search.ingest.models import Chunk, ChunkKind
-from code_search.ingest.sizing import split_if_needed
+from code_search.ingest.sizing import MAX_TOKENS, split_if_needed
 from code_search.ingest.tree_utils import (
     collect_definitions,
     enclosing_class,
@@ -92,7 +93,18 @@ def _module_chunk(root: Node, source: bytes, repo: str, path: str, has_error: bo
     )
 
 
-def parse_source(source: bytes, repo: str, path: str) -> list[Chunk]:
+def parse_source(
+    source: bytes,
+    repo: str,
+    path: str,
+    max_tokens: int = MAX_TOKENS,
+    count_tokens: Callable[[str], int] | None = None,
+) -> list[Chunk]:
+    if count_tokens is None:
+        from code_search.ingest.tokenizer import count_tokens as count_tokens_default
+
+        count_tokens = count_tokens_default
+
     parser = Parser(_LANGUAGE)
     tree = parser.parse(source)
     root = tree.root_node
@@ -107,13 +119,20 @@ def parse_source(source: bytes, repo: str, path: str) -> list[Chunk]:
         chunks.append(module_chunk)
 
     for node in collect_definitions(root):
-        for piece in split_if_needed(node):
+        for piece in split_if_needed(node, max_tokens, count_tokens):
             chunks.append(_chunk_for_definition(piece, source, repo, path, has_error))
 
     return chunks
 
 
-def parse_file(path: str | Path, repo: str = "") -> list[Chunk]:
+def parse_file(
+    path: str | Path,
+    repo: str = "",
+    max_tokens: int = MAX_TOKENS,
+    count_tokens: Callable[[str], int] | None = None,
+) -> list[Chunk]:
     file_path = Path(path)
     source = file_path.read_bytes()
-    return parse_source(source, repo=repo, path=str(file_path))
+    return parse_source(
+        source, repo=repo, path=str(file_path), max_tokens=max_tokens, count_tokens=count_tokens
+    )
