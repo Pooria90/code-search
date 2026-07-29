@@ -3,7 +3,13 @@ from code_search.ingest.python_chunker import parse_source
 
 
 def _chunks(source: str):
-    return parse_source(source.encode("utf-8"), repo="test-repo", path="sample.py")
+    """Chunk with a trivial token counter so tests don't need the embedding model."""
+    return parse_source(
+        source.encode("utf-8"),
+        repo="test-repo",
+        path="sample.py",
+        count_tokens=lambda text: len(text.split()),
+    )
 
 
 def test_decorators_are_preserved_on_functions_and_methods():
