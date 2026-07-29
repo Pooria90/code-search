@@ -9,6 +9,7 @@ from tree_sitter import Language, Node, Parser
 from code_search.ingest.models import Chunk, ChunkKind
 from code_search.ingest.sizing import MAX_TOKENS, split_if_needed
 from code_search.ingest.tree_utils import (
+    class_skeleton,
     collect_definitions,
     enclosing_class,
     get_decorators,
@@ -28,8 +29,55 @@ def _make_id(repo: str, path: str, content: str) -> str:
     return digest[:16]
 
 
-def _content_for(node: Node, class_header: str | None) -> str:
-    text = node.text.decode("utf-8", errors="replace")
+_SOURCE_ROOT_NAMES = {"src", "lib"}
+_PROJECT_MARKERS = ("pyproject.toml", "setup.py", "setup.cfg")
+
+
+def resolve_module_name(path: str | Path) -> str:
+    """Dotted module name for a file, walking up the package tree so names are
+    free of wherever the repo happens to sit on disk: `<anything>/src/flask/
+    app.py` is `flask.app`.
+
+    A parent counts as a package if it has an `__init__.py`, or — for PEP 420
+    namespace packages like `flask/sansio/` — if it merely looks like one. The
+    walk stops at a source root or a directory holding a project marker, since
+    those sit above the import root."""
+    file_path = Path(path)
+    parts = [file_path.stem]
+
+    parent = file_path.parent
+    while parent != parent.parent:
+        if not (parent / "__init__.py").is_file():
+            if (
+                parent.name in _SOURCE_ROOT_NAMES
+                or not parent.name.isidentifier()
+                or any((parent / marker).is_file() for marker in _PROJECT_MARKERS)
+            ):
+                break
+        parts.append(parent.name)
+        parent = parent.parent
+
+    if parts[0] == "__init__":
+        parts.pop(0)
+    return ".".join(reversed(parts))
+
+
+def _fallback_module_name(path: str) -> str:
+    """Used when there's no file to inspect (in-memory `parse_source`)."""
+    name = path.replace("\\", "/").removesuffix(".py").replace("/", ".")
+    return name.removesuffix(".__init__")
+
+
+def _embed_content(node: Node, source: bytes, class_header: str | None = None) -> str:
+    """The text a definition contributes to the index. Classes become skeletons
+    so the coarse chunk doesn't duplicate its own METHOD chunks; methods get
+    their class header prepended for scope.
+
+    Both a class chunk's own id and its methods' parent_id are hashed from this,
+    so the two agree by construction rather than by coincidence."""
+    if unwrap(node).type == "class_definition":
+        return class_skeleton(node, source)
+    text = source[node.start_byte : node.end_byte].decode("utf-8", errors="replace")
     if class_header is None:
         return text
     return f"{class_header}\n    ...\n{text}"
@@ -47,8 +95,8 @@ def _chunk_for_definition(node: Node, source: bytes, repo: str, path: str, has_e
         if parent_class is not None
         else ChunkKind.FUNCTION
     )
-    content = _content_for(node, class_header)
-    parent_id = _make_id(repo, path, _content_for(parent_class, None)) if parent_class is not None else None
+    content = _embed_content(node, source, class_header)
+    parent_id = _make_id(repo, path, _embed_content(parent_class, source)) if parent_class is not None else None
 
     return Chunk(
         id=_make_id(repo, path, content),
@@ -67,7 +115,9 @@ def _chunk_for_definition(node: Node, source: bytes, repo: str, path: str, has_e
     )
 
 
-def _module_chunk(root: Node, source: bytes, repo: str, path: str, has_error: bool) -> Chunk | None:
+def _module_chunk(
+    root: Node, source: bytes, repo: str, path: str, module_name: str, has_error: bool
+) -> Chunk | None:
     header_children = [
         child for child in root.children if child.type not in _DEF_TYPES and child.type != "decorated_definition"
     ]
@@ -81,7 +131,7 @@ def _module_chunk(root: Node, source: bytes, repo: str, path: str, has_error: bo
         repo=repo,
         path=path,
         kind=ChunkKind.MODULE,
-        qualified_name=path.replace("/", ".").removesuffix(".py"),
+        qualified_name=module_name,
         signature=None,
         docstring=get_module_docstring(root),
         decorators=[],
@@ -99,11 +149,14 @@ def parse_source(
     path: str,
     max_tokens: int = MAX_TOKENS,
     count_tokens: Callable[[str], int] | None = None,
+    module_name: str | None = None,
 ) -> list[Chunk]:
     if count_tokens is None:
         from code_search.ingest.tokenizer import count_tokens as count_tokens_default
 
         count_tokens = count_tokens_default
+    if module_name is None:
+        module_name = _fallback_module_name(path)
 
     parser = Parser(_LANGUAGE)
     tree = parser.parse(source)
@@ -114,7 +167,7 @@ def parse_source(
 
     chunks: list[Chunk] = []
 
-    module_chunk = _module_chunk(root, source, repo, path, has_error)
+    module_chunk = _module_chunk(root, source, repo, path, module_name, has_error)
     if module_chunk is not None:
         chunks.append(module_chunk)
 
@@ -134,5 +187,10 @@ def parse_file(
     file_path = Path(path)
     source = file_path.read_bytes()
     return parse_source(
-        source, repo=repo, path=str(file_path), max_tokens=max_tokens, count_tokens=count_tokens
+        source,
+        repo=repo,
+        path=str(file_path),
+        max_tokens=max_tokens,
+        count_tokens=count_tokens,
+        module_name=resolve_module_name(file_path),
     )
