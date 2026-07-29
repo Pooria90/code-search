@@ -57,6 +57,23 @@ class Point:
     assert all("class Point:" in c.content for c in method_chunks)
 
 
+def test_decorated_class_does_not_duplicate_its_name_in_members():
+    """A decorated_definition and the class_definition it wraps resolve to the
+    same name, so unwrapping at every step of the parent walk yields
+    'Widget.Widget.label'."""
+    source = """
+@dataclass
+class Widget:
+    def label(self):
+        return 1
+
+    class Meta:
+        pass
+"""
+    names = {c.qualified_name for c in _chunks(source)}
+    assert names == {"Widget", "Widget.label", "Widget.Meta"}
+
+
 def test_top_level_function_is_not_a_method():
     source = """
 def standalone():
