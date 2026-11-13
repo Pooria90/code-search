@@ -5,9 +5,16 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "einops>=0.8.0",
     "loguru>=0.7.3",
+    "numpy>=2.0.0",
     "rich>=15.0.0",
+    "sentence-transformers>=5.0.0",
     "tokenizers>=0.22.0",
+    "torch>=2.0.0",
+    # jina-embeddings-v2's trust_remote_code targets transformers 4.x; v5 removed
+    # find_pruneable_heads_and_indices and the model fails to import.
+    "transformers<5",
     "tree-sitter>=0.26.0",
     "tree-sitter-python>=0.25.0",
 ]
@@ -16,6 +23,15 @@ dependencies = [
 dev = [
     "pytest>=8.0.0",
 ]
+
+# No GPU here, and the default linux torch wheel bundles ~2.3GB of CUDA.
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [build-system]
 requires = ["hatchling"]
